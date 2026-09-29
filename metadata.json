@@ -1,0 +1,6 @@
+{
+  "name": "Hortus Botanicus",
+  "description": "Editorial botanical identification monograph, plant pathology analyzer, and seasonal garden care assistant.",
+  "requestFramePermissions": ["camera", "geolocation", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,179 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint: FarmSpecimen
+    function isValidFarmSpecimen(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'accessionNumber',
+          'commonName',
+          'scientificName',
+          'family',
+          'locationInFarm',
+          'lastWateredDate',
+          'nextWateringDueDays',
+          'overallHealth',
+          'soilPhRange',
+          'wateringInterval',
+          'editorialSummary',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'accessionNumber',
+          'commonName',
+          'scientificName',
+          'family',
+          'locationInFarm',
+          'lastWateredDate',
+          'nextWateringDueDays',
+          'overallHealth',
+          'soilPhRange',
+          'wateringInterval',
+          'editorialSummary',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.ownerId == request.auth.uid
+        && data.accessionNumber is string && data.accessionNumber.size() >= 1 && data.accessionNumber.size() <= 64
+        && data.commonName is string && data.commonName.size() >= 1 && data.commonName.size() <= 160
+        && data.scientificName is string && data.scientificName.size() >= 1 && data.scientificName.size() <= 160
+        && data.family is string && data.family.size() >= 1 && data.family.size() <= 120
+        && data.locationInFarm is string && data.locationInFarm.size() >= 1 && data.locationInFarm.size() <= 160
+        && data.lastWateredDate is string && data.lastWateredDate.size() >= 4 && data.lastWateredDate.size() <= 32
+        && data.nextWateringDueDays is int && data.nextWateringDueDays >= 0 && data.nextWateringDueDays <= 365
+        && data.overallHealth is string && data.overallHealth.size() >= 1 && data.overallHealth.size() <= 200
+        && data.soilPhRange is string && data.soilPhRange.size() >= 1 && data.soilPhRange.size() <= 80
+        && data.wateringInterval is string && data.wateringInterval.size() >= 1 && data.wateringInterval.size() <= 160
+        && data.editorialSummary is string && data.editorialSummary.size() >= 1 && data.editorialSummary.size() <= 2000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: FieldReport
+    function isValidFieldReport(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'locationName',
+          'latitude',
+          'longitude',
+          'altitudeMeters',
+          'estimatedSoilPh',
+          'rainWindow',
+          'plantingWindow',
+          'advisoryNotes',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'locationName',
+          'latitude',
+          'longitude',
+          'altitudeMeters',
+          'estimatedSoilPh',
+          'rainWindow',
+          'plantingWindow',
+          'advisoryNotes',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.ownerId == request.auth.uid
+        && data.locationName is string && data.locationName.size() >= 1 && data.locationName.size() <= 160
+        && (data.latitude is number || data.latitude is int) && data.latitude >= -90 && data.latitude <= 90
+        && (data.longitude is number || data.longitude is int) && data.longitude >= -180 && data.longitude <= 180
+        && (data.altitudeMeters is number || data.altitudeMeters is int) && data.altitudeMeters >= -500 && data.altitudeMeters <= 9000
+        && data.estimatedSoilPh is string && data.estimatedSoilPh.size() >= 1 && data.estimatedSoilPh.size() <= 160
+        && data.rainWindow is string && data.rainWindow.size() >= 1 && data.rainWindow.size() <= 300
+        && data.plantingWindow is string && data.plantingWindow.size() >= 1 && data.plantingWindow.size() <= 500
+        && data.advisoryNotes is string && data.advisoryNotes.size() >= 1 && data.advisoryNotes.size() <= 4000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Collection: /specimens/{specimenId}
+    match /specimens/{specimenId} {
+      allow get: if isSignedIn() && isValidId(specimenId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(specimenId)
+        && isValidFarmSpecimen(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(specimenId)
+        && isValidFarmSpecimen(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Record Irrigation
+          incoming().diff(existing()).affectedKeys().hasOnly(['lastWateredDate', 'nextWateringDueDays', 'updatedAt']) ||
+          // Action 2: Update Location or Health Notes
+          incoming().diff(existing()).affectedKeys().hasOnly(['locationInFarm', 'overallHealth', 'updatedAt'])
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(specimenId)
+        && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection: /fieldReports/{reportId}
+    match /fieldReports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(reportId)
+        && isValidFieldReport(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(reportId)
+        && isValidFieldReport(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['locationName', 'advisoryNotes', 'updatedAt']);
+
+      allow delete: if isVerifiedUser()
+        && isValidId(reportId)
+        && existing().ownerId == request.auth.uid;
+    }
+  }
+}
